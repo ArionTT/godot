@@ -108,7 +108,23 @@ private:
 	ID id = UNASSIGNED_ID;
 
 	static inline SafeFlag is_main_thread_assigned{ false };
-	static SafeNumeric<uint64_t> id_counter;
+	// 取号器：改用惰性初始化的函数内静态量，而不是静态存储期的对象。
+	//
+	// ⚠️ 为什么（2026-10-11 实测根因）：原写法是
+	//     SafeNumeric<uint64_t> Thread::id_counter(1);
+	//     thread_local ID Thread::caller_id = Thread::id_counter.increment();
+	//   两者都是**动态初始化**（SafeNumeric 的构造函数调用 std::atomic::store，非 constexpr；
+	//   C++17 下 std::atomic 的构造函数同样不是 constexpr），而跨编译单元的静态初始化
+	//   顺序在 C++ 中是**不确定**的。顺序一旦反过来，caller_id 的初始化器就会读到
+	//   id_counter 仍为 0 的时刻，increment() 于是返回 1 = MAIN_ID —— 主线程「天生」就是
+	//   主线程，make_main_thread() 走 `if (caller_id == MAIN_ID) return;` 提前返回，
+	//   is_main_thread_assigned 永不置位，最终在 release_main_thread() 的断言处崩溃。
+	//   profiler=tracy 构建可稳定复现（Tracy 的静态初始化改变了该顺序）；
+	//   此外动态初始化还会把计数器重置回 1，造成线程 ID 重复。
+	//
+	//   函数内静态量由语言保证「首次使用时才初始化」，因此 increment() 必然先看到 1，
+	//   首个 ID 稳定为 2；同时也消除计数器被重置的问题。
+	static SafeNumeric<uint64_t> &_id_counter();
 	static thread_local ID caller_id;
 	THREADING_NAMESPACE::thread thread;
 

@@ -37,8 +37,14 @@
 #ifdef THREADS_ENABLED
 #include "core/object/script_language.h"
 
-SafeNumeric<uint64_t> Thread::id_counter(1); // The first value after .increment() is 2, hence by default the main thread ID should be 1.
-thread_local Thread::ID Thread::caller_id = Thread::id_counter.increment();
+SafeNumeric<uint64_t> &Thread::_id_counter() {
+	// 函数内静态量：保证在任何 thread_local 初始化器读取它之前完成初始化，
+	// 从而消除跨编译单元的静态初始化顺序依赖（详见 thread.h 中该函数的说明）。
+	static SafeNumeric<uint64_t> counter(1); // .increment() 的首个返回值是 2，故主线程 ID 保留为 1。
+	return counter;
+}
+
+thread_local Thread::ID Thread::caller_id = Thread::_id_counter().increment();
 
 #endif
 
@@ -71,7 +77,7 @@ void Thread::callback(ID p_caller_id, const Settings &p_settings, Callback p_cal
 
 Thread::ID Thread::start(Thread::Callback p_callback, void *p_user, const Settings &p_settings) {
 	ERR_FAIL_COND_V_MSG(id != UNASSIGNED_ID, UNASSIGNED_ID, "A Thread object has been re-started without wait_to_finish() having been called on it.");
-	id = id_counter.increment();
+	id = _id_counter().increment();
 	thread = THREADING_NAMESPACE::thread(&Thread::callback, id, p_settings, p_callback, p_user);
 	return id;
 }
@@ -99,7 +105,7 @@ void Thread::make_main_thread() {
 void Thread::release_main_thread() {
 	CRASH_COND_MSG(caller_id != MAIN_ID, "Trying to release main thread from a thread that isn't main.");
 	CRASH_COND(!is_main_thread_assigned.clear_if_set());
-	caller_id = id_counter.increment();
+	caller_id = _id_counter().increment();
 }
 
 Error Thread::set_name(const String &p_name) {
